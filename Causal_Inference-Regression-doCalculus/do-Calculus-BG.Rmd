@@ -1,0 +1,128 @@
+---
+title: "do-Calculus"
+author: "Bianca Granato"
+date: "September 10, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+```
+
+#Functions
+
+```{r}
+expit <- function(x){
+  y <- 1/(1+exp(-x))
+  y
+}
+
+plottingFunction <- function(x,ttl){
+  if((as.factor(x) %>% levels() %>% length()) > 3){
+    hist(x,main = ttl,xlab = "")
+  } else {
+    plot(as.factor(x), main = ttl)
+  }
+}
+
+getData <- function(n){
+  #generate data
+  df <- data.frame("x1" = as.numeric(rbernoulli(n, p = 0.5)), #e.g gender
+                 "x2" = round(rnorm(n = n,mean = 50, sd = 2),2)/10, #e.g. age
+                 "x3" = as.numeric(rbernoulli(n, p = 0.7)), #e.g. family history
+                 "z" = as.numeric(rbernoulli(n, p = 0.5))) #treatment
+  
+  covs <- df[,startsWith(colnames(df),"x")]
+  rx <- df$z
+  
+  #f <- ifelse(covs$x1 == 0, 2.3, 1.50) + (covs$x2^2/(covs$x2+3)) + ifelse(covs$x3 == 1, 1.78, 0)
+  f <- ifelse(covs$x1 == 0, 2.3, 1.50) + covs$x2^2 + ifelse(covs$x3 == 1, 1.78, 0)
+  f <- f - median(f) +rnorm(1) #surrogate for intercept to insure centered to zero
+  g <- 0.2*covs$x1 - 0.8*covs$x2 + 0.5*covs$x3
+  g <- g - mean(g) #same
+  
+  #Convert function to probabilities
+  prob.y <- (f + rx*g) %>% expit()
+  
+  #Sample binimial using probabilities
+  df$y <- rbinom(length(prob.y),1,prob.y)
+  
+  #This is the "treatment effect"
+  df$g <- g
+  
+  return(df)
+}
+```
+
+#Get and visualize data
+
+```{r}
+#Get data
+set.seed(123)
+n  <- 1000
+
+df <- getData(n)
+
+#Plot
+par(mfrow = c(2,3))
+mapply(plottingFunction,df,colnames(df)) %>% invisible()
+```
+
+#Optima treatment
+
+Treatment effect is positive (i.e. treatment was beneficial)
+
+```{r}
+opt.rx <- ifelse(df$g > 0, df$z, as.numeric(!df$z))
+t <- table("Received Rx" = df$z, "Optmial Rx" = opt.rx)
+t
+paste0("Reived optimal treatment: ",sum(t[c(1,4)])*100/nrow(df),"%")
+```
+
+
+#Regress
+
+Assume covariates interact with treatment but not each other
+
+```{r}
+#Set regression model of interaction of covariates with treatment
+reg.model <- glm(y ~ (x1 + x2 + x3)*z,"binomial",df)
+summary(reg.model)
+```
+
+#Predict
+
+First assess counterfactuals for each treatment. Subtract probabilities to obtain estimated treatment effect
+
+```{r}
+#Clone df
+df0 <- df1 <- df
+df0$z <- as.numeric(0)
+df1$z <- as.numeric(1)
+
+#Predict response with predict()
+preds <- data.frame("g.real" = df$g,
+                          "scr.0" = predict(reg.model, df0, type = "response"), #prob of event under do(placebo)
+                          "scr.1" = predict(reg.model, df1, type = "response")) #prob of event under do(treat)
+
+#Predict optima treatment
+preds$g.pred <- preds$scr.1 - preds$scr.0 #prob(event|do(treat)) - prob(event|do(placebo))
+preds$opt.real <- (df$g > 0) %>% as.numeric() %>% as.factor() #real optimal treatment
+preds$opt.pred <- ((preds$scr.1 - preds$scr.0) > 0) %>% as.numeric() %>% as.factor() #predicted optimal treatment
+
+par(mfrow = c(2,3))
+mapply(plottingFunction, preds, colnames(preds))  %>% invisible()
+```
+
+#Compare
+
+```{r}
+t <- table("Observed Opt" = preds$opt.real, "Predicted Opt" = preds$opt.pred)
+paste0("Accuracy = ",sum(t[c(1,4)])*100/nrow(df),"%")
+t
+```
+
+
+
